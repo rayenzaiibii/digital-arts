@@ -18,7 +18,7 @@ SMOOTH_RADIUS = 1.4
 MEDIAN_SIZE = 3
 PHOTO_EDGE_THRESHOLD = 70
 MIN_REGION_AREA_RATIO = 0.0008
-MIN_NUMBER_AREA_RATIO = 0.0025
+MIN_NUMBER_AREA_RATIO = 0.0005
 OUTLINE_RGB = (15, 15, 15)
 PAGE_BG = (255, 255, 255)
 
@@ -71,11 +71,9 @@ def build_coloring_page(image_bytes: bytes, n_colors: int = 10) -> ColoringResul
 
 
 def _fit_square(img: Image.Image, size: int) -> Image.Image:
-    canvas = Image.new("RGB", (size, size), PAGE_BG)
     src = img.copy()
     src.thumbnail((size, size), Image.LANCZOS)
-    canvas.paste(src, ((size - src.width) // 2, (size - src.height) // 2))
-    return canvas
+    return src
 
 
 def _photo_edges(rgb: np.ndarray) -> np.ndarray:
@@ -185,7 +183,13 @@ def _render_page(labels: np.ndarray, color_id_to_number: dict, photo_edges: np.n
             bbox = draw.textbbox((0, 0), text, font=font)
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
-            _draw_text_with_halo(draw, (cx - tw / 2, cy - th / 2), text, font)
+            
+            # Keep numbers inside the image bounds
+            margin = 4
+            clamped_cx = max(tw / 2 + margin, min(w - tw / 2 - margin, cx))
+            clamped_cy = max(th / 2 + margin, min(h - th / 2 - margin, cy))
+            
+            _draw_text_with_halo(draw, (clamped_cx - tw / 2, clamped_cy - th / 2), text, font)
 
     return page
 

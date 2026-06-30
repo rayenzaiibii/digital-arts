@@ -22,6 +22,22 @@ const wantStoryToggle = document.querySelector("#wantStory");
 const sketchCanvas = document.querySelector("#sketchCanvas");
 const sketchContext = sketchCanvas.getContext("2d", { willReadFrequently: true });
 
+// Interactive Coloring UI
+const interactiveCanvas = document.querySelector("#interactiveCanvas");
+const intCtx = interactiveCanvas.getContext("2d", { willReadFrequently: true });
+const toolBrush = document.querySelector("#toolBrush");
+const toolFill = document.querySelector("#toolFill");
+const toolEraser = document.querySelector("#toolEraser");
+const toolClear = document.querySelector("#toolClear");
+const brushSize = document.querySelector("#brushSize");
+const brushSizeValue = document.querySelector("#brushSizeValue");
+
+let currentTool = "brush";
+let activeColor = "#ff7a59";
+let isDrawing = false;
+let lastX = 0;
+let lastY = 0;
+
 const SKETCH_SIZE = 768;
 const PAPER_COLOR = "#fbf6e9";
 const INK_COLOR = "#1c1a16";
@@ -98,9 +114,12 @@ async function handleFile(file) {
   await runGeneration(sketchBlob);
 }
 
+let textPollTimer = null;
+
 async function runGeneration(sketchBlob) {
   if (!selectedFile) return;
 
+  clearTimeout(textPollTimer);
   setState("loading");
 
   const formData = new FormData();
@@ -124,9 +143,23 @@ async function runGeneration(sketchBlob) {
     }
 
     generatedImage.src = `data:image/png;base64,${payload.image_base64}`;
+    
+    generatedImage.onload = () => {
+      interactiveCanvas.width = generatedImage.naturalWidth;
+      interactiveCanvas.height = generatedImage.naturalHeight;
+      intCtx.lineCap = "round";
+      intCtx.lineJoin = "round";
+      window.outlineData = null; // Clear cached outline for flood fill
+    };
+
     renderLegend(payload.legend || []);
     renderStory(payload.story || "");
     renderAbout(payload.about || "");
+    
+    if (payload.text_rate_limited) {
+      pollForText(formData);
+    }
+
     setState("result");
   } catch (error) {
     setState("upload");
@@ -134,11 +167,43 @@ async function runGeneration(sketchBlob) {
   }
 }
 
+async function pollForText(formData) {
+  clearTimeout(textPollTimer);
+  
+  try {
+    const res = await fetch("/api/text", {
+      method: "POST",
+      body: formData,
+    });
+    
+    if (res.status === 429) {
+      textPollTimer = setTimeout(() => pollForText(formData), 15000);
+      return;
+    }
+    
+    if (!res.ok) {
+      throw new Error("Failed to fetch text");
+    }
+    
+    const payload = await res.json();
+    if (payload.story) renderStory(payload.story);
+    if (payload.about) renderAbout(payload.about);
+    
+  } catch (err) {
+    console.error("Polling error:", err);
+  }
+}
+
 function renderLegend(legend) {
   legendList.innerHTML = "";
-  legend.forEach((entry) => {
+  legend.forEach((entry, idx) => {
     const li = document.createElement("li");
     li.className = "legend-item";
+    
+    if (idx === 0) {
+      li.classList.add("active");
+      activeColor = entry.hex;
+    }
 
     const swatch = document.createElement("span");
     swatch.className = "legend-swatch";
@@ -150,6 +215,14 @@ function renderLegend(legend) {
     meta.innerHTML = `<strong>${entry.number}</strong><span>${entry.hex}</span>`;
 
     li.append(swatch, meta);
+    
+    li.addEventListener("click", () => {
+      document.querySelectorAll(".legend-item").forEach(item => item.classList.remove("active"));
+      li.classList.add("active");
+      activeColor = entry.hex;
+      if (currentTool === "eraser") setTool("brush");
+    });
+    
     legendList.append(li);
   });
 }
@@ -176,8 +249,24 @@ function renderAbout(about) {
 
 function downloadPage() {
   if (!generatedImage.src) return;
+  
+  const mergeCanvas = document.createElement("canvas");
+  mergeCanvas.width = generatedImage.naturalWidth;
+  mergeCanvas.height = generatedImage.naturalHeight;
+  const mctx = mergeCanvas.getContext("2d");
+  
+  mctx.fillStyle = "#ffffff";
+  mctx.fillRect(0, 0, mergeCanvas.width, mergeCanvas.height);
+  
+  // Draw colors first
+  mctx.drawImage(interactiveCanvas, 0, 0);
+  
+  // Draw outlines on top with multiply
+  mctx.globalCompositeOperation = "multiply";
+  mctx.drawImage(generatedImage, 0, 0);
+  
   const link = document.createElement("a");
-  link.href = generatedImage.src;
+  link.href = mergeCanvas.toDataURL("image/png");
   link.download = "coloring-page.png";
   document.body.append(link);
   link.click();
@@ -316,4 +405,210 @@ function showError(message) {
 function clearError() {
   errorMessage.textContent = "";
   errorMessage.hidden = true;
+}
+
+// --- Interactive Drawing Logic ---
+
+toolBrush.addEventListener("click", () => setTool("brush"));
+toolFill.addEventListener("click", () => setTool("fill"));
+toolEraser.addEventListener("click", () => setTool("eraser"));
+toolClear.addEventListener("click", () => {
+  intCtx.clearRect(0, 0, interactiveCanvas.width, interactiveCanvas.height);
+});
+
+brushSize.addEventListener("input", () => {
+  brushSizeValue.textContent = brushSize.value;
+});
+
+function setTool(tool) {
+  currentTool = tool;
+  toolBrush.classList.toggle("active", tool === "brush");
+  toolFill.classList.toggle("active", tool === "fill");
+  toolEraser.classList.toggle("active", tool === "eraser");
+  
+  if (tool === "eraser") {
+    interactiveCanvas.style.cursor = "crosshair";
+  } else if (tool === "fill") {
+    interactiveCanvas.style.cursor = "crosshair";
+  } else {
+    interactiveCanvas.style.cursor = "crosshair";
+  }
+}
+
+function getPos(e) {
+  const rect = interactiveCanvas.getBoundingClientRect();
+  const scaleX = interactiveCanvas.width / rect.width;
+  const scaleY = interactiveCanvas.height / rect.height;
+  let clientX = e.clientX;
+  let clientY = e.clientY;
+  if (e.touches && e.touches.length > 0) {
+    clientX = e.touches[0].clientX;
+    clientY = e.touches[0].clientY;
+  }
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+function startDrawing(e) {
+  if (e.cancelable) e.preventDefault();
+  isDrawing = true;
+  const pos = getPos(e);
+  lastX = pos.x;
+  lastY = pos.y;
+  
+  if (currentTool === "fill") {
+    isDrawing = false;
+    floodFill(Math.floor(pos.x), Math.floor(pos.y), hexToRgb(activeColor));
+  } else {
+    draw(e);
+  }
+}
+
+function draw(e) {
+  if (!isDrawing) return;
+  if (e.cancelable) e.preventDefault();
+  const pos = getPos(e);
+  
+  intCtx.lineWidth = brushSize.value;
+  
+  if (currentTool === "eraser") {
+    intCtx.globalCompositeOperation = "destination-out";
+    intCtx.strokeStyle = "rgba(0,0,0,1)";
+  } else {
+    intCtx.globalCompositeOperation = "source-over";
+    intCtx.strokeStyle = activeColor;
+  }
+  
+  intCtx.beginPath();
+  intCtx.moveTo(lastX, lastY);
+  intCtx.lineTo(pos.x, pos.y);
+  intCtx.stroke();
+  
+  lastX = pos.x;
+  lastY = pos.y;
+}
+
+function stopDrawing() {
+  isDrawing = false;
+}
+
+interactiveCanvas.addEventListener("mousedown", startDrawing);
+interactiveCanvas.addEventListener("mousemove", draw);
+interactiveCanvas.addEventListener("mouseup", stopDrawing);
+interactiveCanvas.addEventListener("mouseleave", stopDrawing);
+
+interactiveCanvas.addEventListener("touchstart", startDrawing, {passive: false});
+interactiveCanvas.addEventListener("touchmove", draw, {passive: false});
+interactiveCanvas.addEventListener("touchend", stopDrawing);
+interactiveCanvas.addEventListener("touchcancel", stopDrawing);
+
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : {r:0,g:0,b:0};
+}
+
+function floodFill(startX, startY, fillColorRgb) {
+  const canvasWidth = interactiveCanvas.width;
+  const canvasHeight = interactiveCanvas.height;
+  
+  if (!window.outlineData) {
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = canvasWidth;
+    tempCanvas.height = canvasHeight;
+    const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
+    tempCtx.drawImage(generatedImage, 0, 0);
+    window.outlineData = tempCtx.getImageData(0, 0, canvasWidth, canvasHeight).data;
+  }
+  
+  const outlineData = window.outlineData;
+  const imageData = intCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+  const data = imageData.data;
+  
+  const startPos = (startY * canvasWidth + startX) * 4;
+  
+  // Abort if clicking on black outline
+  if (outlineData[startPos] < 50 && outlineData[startPos+1] < 50 && outlineData[startPos+2] < 50) return;
+  
+  const targetR = data[startPos];
+  const targetG = data[startPos + 1];
+  const targetB = data[startPos + 2];
+  const targetA = data[startPos + 3];
+  
+  const fillR = fillColorRgb.r;
+  const fillG = fillColorRgb.g;
+  const fillB = fillColorRgb.b;
+  
+  if (targetR === fillR && targetG === fillG && targetB === fillB && targetA === 255) return;
+  
+  const stack = [[startX, startY]];
+  
+  function matchStartColor(pixelPos) {
+    if (outlineData[pixelPos] < 100 && outlineData[pixelPos+1] < 100 && outlineData[pixelPos+2] < 100) return false;
+    const r = data[pixelPos];
+    const g = data[pixelPos + 1];
+    const b = data[pixelPos + 2];
+    const a = data[pixelPos + 3];
+    return r === targetR && g === targetG && b === targetB && a === targetA;
+  }
+  
+  function colorPixel(pixelPos) {
+    data[pixelPos] = fillR;
+    data[pixelPos + 1] = fillG;
+    data[pixelPos + 2] = fillB;
+    data[pixelPos + 3] = 255;
+  }
+  
+  while(stack.length) {
+    const [x, y] = stack.pop();
+    let currentX = x;
+    let pixelPos = (y * canvasWidth + currentX) * 4;
+    
+    while(currentX >= 0 && matchStartColor(pixelPos)) {
+      currentX--;
+      pixelPos -= 4;
+    }
+    
+    currentX++;
+    pixelPos += 4;
+    
+    let reachAbove = false;
+    let reachBelow = false;
+    
+    while(currentX < canvasWidth && matchStartColor(pixelPos)) {
+      colorPixel(pixelPos);
+      
+      if(y > 0) {
+        if(matchStartColor(pixelPos - canvasWidth * 4)) {
+          if(!reachAbove) {
+            stack.push([currentX, y - 1]);
+            reachAbove = true;
+          }
+        } else if(reachAbove) {
+          reachAbove = false;
+        }
+      }
+      
+      if(y < canvasHeight - 1) {
+        if(matchStartColor(pixelPos + canvasWidth * 4)) {
+          if(!reachBelow) {
+            stack.push([currentX, y + 1]);
+            reachBelow = true;
+          }
+        } else if(reachBelow) {
+          reachBelow = false;
+        }
+      }
+      
+      currentX++;
+      pixelPos += 4;
+    }
+  }
+  
+  intCtx.putImageData(imageData, 0, 0);
 }

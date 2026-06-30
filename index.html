@@ -72,8 +72,24 @@
                 <button class="primary-button" id="printButton" type="button">Print</button>
               </div>
             </div>
-            <div class="image-frame">
+
+            <div class="interactive-toolbar no-print" id="interactiveToolbar">
+              <div class="tool-group">
+                <button class="tool-button active" id="toolBrush" type="button" title="Brush">🖌️ Brush</button>
+                <button class="tool-button" id="toolFill" type="button" title="Fill">🪣 Fill</button>
+                <button class="tool-button" id="toolEraser" type="button" title="Eraser">🧹 Eraser</button>
+              </div>
+              <div class="tool-group">
+                <label for="brushSize" class="brush-size-label">Size: <span id="brushSizeValue">20</span></label>
+                <input type="range" id="brushSize" min="5" max="100" value="20" class="brush-size-slider" />
+              </div>
+              <div class="toolbar-spacer"></div>
+              <button class="tool-button danger" id="toolClear" type="button" title="Clear All">🗑️ Clear</button>
+            </div>
+
+            <div class="image-frame interactive-frame" id="imageFrame">
               <img id="generatedImage" alt="Generated paint-by-number coloring page" />
+              <canvas id="interactiveCanvas"></canvas>
             </div>
           </article>
 
@@ -90,8 +106,8 @@
         <aside class="result-sidebar no-print">
           <section class="legend-card">
             <h2>Color guide</h2>
-            <p class="legend-hint">Match each number on the page to its color below.</p>
-            <ul class="legend" id="legendList"></ul>
+            <p class="legend-hint">Click a color to select it, then paint on the picture!</p>
+            <ul class="legend interactive-legend" id="legendList"></ul>
           </section>
 
           <section class="story-card" id="storyCard" hidden>
